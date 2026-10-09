@@ -50,7 +50,22 @@ button[disabled]{opacity:.6}
   function lsGet(){ try { return localStorage.getItem(LS); } catch(e) { return null; } }
   function lsSet(v){ try { if (v) localStorage.setItem(LS, v); else localStorage.removeItem(LS); } catch(e) {} }
   var dataP = null;
-  function data(){ if (!dataP) dataP = fetch('data.bin', {cache: 'no-cache'}).then(function(r){ if (!r.ok) throw new Error('net'); return r.arrayBuffer(); }); return dataP; }
+  function getBuf(name){ return fetch(name, {cache: 'no-cache'}).then(function(r){ if (!r.ok) throw new Error('net'); return r.arrayBuffer(); }, function(){ throw new Error('net'); }); }
+  function data(){
+    if (!dataP) dataP = getBuf('data.bin').then(function(b0){
+      var u = new Uint8Array(b0);
+      if (!(u.length > 17 && u[0] === 71 && u[1] === 82 && u[2] === 68 && u[3] === 50)) return b0;   // régi, egyfájlos formátum
+      var n = u[4], id = String.fromCharCode.apply(null, u.subarray(5, 17)), names = [];
+      for (var i = 2; i <= n; i++) names.push('data' + i + '.bin?v=' + id);
+      return Promise.all(names.map(getBuf)).then(function(rest){
+        var total = u.length - 17; rest.forEach(function(b){ total += b.byteLength; });
+        var out = new Uint8Array(total), off = u.length - 17; out.set(u.subarray(17), 0);
+        rest.forEach(function(b){ out.set(new Uint8Array(b), off); off += b.byteLength; });
+        return out.buffer;
+      });
+    });
+    return dataP;
+  }
   function rawFromPassword(pw, salt){
     return crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveBits'])
       .then(function(base){ return crypto.subtle.deriveBits({name:'PBKDF2', salt: salt, iterations: ITER, hash:'SHA-256'}, base, 256); })
@@ -68,7 +83,7 @@ button[disabled]{opacity:.6}
   var saved = lsGet();
   if (saved){
     $('busy').hidden = false;
-    data().then(function(buf){ return openWith(unb64(saved), buf); }).then(show).catch(function(){ lsSet(null); showForm(); });
+    data().then(function(buf){ return openWith(unb64(saved), buf); }).then(show).catch(function(err){ dataP = null; showForm(err && err.message === 'net' ? 'Nem sikerült letölteni. Van internet?' : ''); });
   } else showForm();
   $('f').addEventListener('submit', function(e){
     e.preventDefault();
@@ -79,6 +94,7 @@ button[disabled]{opacity:.6}
         return openWith(raw, buf).then(function(html){ if ($('rem').checked) lsSet(b64(raw)); else lsSet(null); show(html); }, function(){ throw new Error('pw'); });
       });
     }).catch(function(err){
+      if (err && err.message === 'net') dataP = null;
       showForm(err && err.message === 'net' ? 'Nem sikerült letölteni. Van internet?' : 'Hibás jelszó.');
     });
   });
