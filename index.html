@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Gardrób">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#ebe7e2">
+<meta name="robots" content="noindex, nofollow">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<title>Barbi gardróbja</title>
+<style>
+:root{--bg:#ebe7e2;--surface:#f6f3ef;--ink:#1f1b19;--muted:#6f6660;--line:#d7d0c9;--accent:#6b2f55}
+@media (prefers-color-scheme: dark){:root{--bg:#161413;--surface:#211e1c;--ink:#f1ece6;--muted:#a79d95;--line:#38322e;--accent:#d79bc1}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font-family:-apple-system,"Segoe UI",Roboto,sans-serif;display:grid;place-items:center;padding:24px}
+main{width:100%;max-width:360px}
+h1{font-family:"Bodoni 72","Didot",Georgia,serif;font-weight:600;font-size:38px;line-height:1;margin:0 0 8px}
+p{color:var(--muted);font-size:15px;margin:0 0 22px}
+input[type=password]{width:100%;font-size:17px;padding:14px 14px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:var(--ink)}
+label{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:14px;margin:12px 0 18px}
+button{width:100%;font-size:17px;font-weight:600;padding:14px;border-radius:999px;border:0;background:var(--accent);color:#fff;cursor:pointer}
+button[disabled]{opacity:.6}
+#err{color:#b3261e;font-size:14px;min-height:20px;margin-top:12px}
+#busy{color:var(--muted);font-size:15px;text-align:center}
+</style>
+</head>
+<body>
+<main>
+  <div id="busy" hidden>Betöltés…</div>
+  <form id="f" hidden>
+    <h1>Barbi gardróbja</h1>
+    <p>Írd be a jelszót. Elég egyszer: ezen a telefonon megjegyzem.</p>
+    <input id="pw" type="password" autocomplete="current-password" placeholder="Jelszó" aria-label="Jelszó" required>
+    <label><input id="rem" type="checkbox" checked> Megjegyzés ezen a telefonon</label>
+    <button id="go" type="submit">Megnyitás</button>
+    <div id="err" role="alert"></div>
+  </form>
+</main>
+<script>
+(function(){
+  var ITER = 600000, LS = 'gardrob-kulcs';
+  var $ = function(id){ return document.getElementById(id); };
+  function b64(u8){ var s = ''; for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]); return btoa(s); }
+  function unb64(s){ var b = atob(s), u = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
+  function lsGet(){ try { return localStorage.getItem(LS); } catch(e) { return null; } }
+  function lsSet(v){ try { if (v) localStorage.setItem(LS, v); else localStorage.removeItem(LS); } catch(e) {} }
+  var dataP = null;
+  function data(){ if (!dataP) dataP = fetch('data.bin', {cache: 'no-cache'}).then(function(r){ if (!r.ok) throw new Error('net'); return r.arrayBuffer(); }); return dataP; }
+  function rawFromPassword(pw, salt){
+    return crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveBits'])
+      .then(function(base){ return crypto.subtle.deriveBits({name:'PBKDF2', salt: salt, iterations: ITER, hash:'SHA-256'}, base, 256); })
+      .then(function(bits){ return new Uint8Array(bits); });
+  }
+  function openWith(raw, buf){
+    var salt = buf.slice(0, 16), iv = buf.slice(16, 28), ct = buf.slice(28);
+    return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt'])
+      .then(function(key){ return crypto.subtle.decrypt({name:'AES-GCM', iv: new Uint8Array(iv)}, key, ct); })
+      .then(function(pt){ return new TextDecoder().decode(pt); });
+  }
+  function show(html){ document.open(); document.write(html); document.close(); }
+  function showForm(msg){ $('busy').hidden = true; $('f').hidden = false; $('err').textContent = msg || ''; $('go').disabled = false; }
+  if (!window.crypto || !crypto.subtle){ showForm('Ez a böngésző nem tudja megnyitni (biztonságos kapcsolat kell).'); return; }
+  var saved = lsGet();
+  if (saved){
+    $('busy').hidden = false;
+    data().then(function(buf){ return openWith(unb64(saved), buf); }).then(show).catch(function(){ lsSet(null); showForm(); });
+  } else showForm();
+  $('f').addEventListener('submit', function(e){
+    e.preventDefault();
+    var pw = $('pw').value; if (!pw) return;
+    $('go').disabled = true; $('err').textContent = '';
+    data().then(function(buf){
+      return rawFromPassword(pw, new Uint8Array(buf.slice(0, 16))).then(function(raw){
+        return openWith(raw, buf).then(function(html){ if ($('rem').checked) lsSet(b64(raw)); else lsSet(null); show(html); }, function(){ throw new Error('pw'); });
+      });
+    }).catch(function(err){
+      showForm(err && err.message === 'net' ? 'Nem sikerült letölteni. Van internet?' : 'Hibás jelszó.');
+    });
+  });
+})();
+</script>
+</body>
+</html>
